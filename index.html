@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bắn Cung - MediaPipe Hands</title>
+  <meta name="description" content="Game bắn cung điều khiển bằng tay thật qua MediaPipe Hands và webcam." />
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #111;
+      font-family: 'Segoe UI', Tahoma, sans-serif;
+      overflow: hidden;
+      color: #fff;
+    }
+
+    #game {
+      width: 100vw;
+      height: 100vh;
+      position: fixed;
+      top: 0; left: 0;
+    }
+
+    #webcam-container {
+      position: fixed;
+      bottom: 16px;
+      right: 16px;
+      width: 220px;
+      border-radius: 14px;
+      overflow: hidden;
+      border: 2px solid rgba(136,206,2,0.6);
+      box-shadow: 0 0 20px rgba(136,206,2,0.3);
+      z-index: 100;
+    }
+    #webcam, #overlay-canvas {
+      width: 220px;
+      height: 165px;
+      display: block;
+      object-fit: cover;
+    }
+    #overlay-canvas {
+      position: absolute;
+      top: 0; left: 0;
+    }
+
+    #hud {
+      position: fixed;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 24px;
+      align-items: center;
+      background: rgba(0,0,0,0.55);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 40px;
+      padding: 8px 28px;
+      z-index: 200;
+      font-size: 15px;
+      letter-spacing: .04em;
+    }
+    #hud span { opacity: .5; }
+    #hud b { color: #88ce02; font-size: 18px; }
+
+    #status-badge {
+      position: fixed;
+      bottom: 16px;
+      left: 16px;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(6px);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 30px;
+      padding: 6px 18px;
+      font-size: 13px;
+      color: #aaa;
+      z-index: 200;
+      transition: color .3s;
+    }
+    #status-badge.ready  { color: #88ce02; }
+    #status-badge.drawing { color: #ffcc00; }
+    #status-badge.fired  { color: #F4531C; }
+
+    #debug-panel {
+      position: fixed;
+      top: 80px;
+      left: 16px;
+      background: rgba(0,0,0,0.75);
+      border: 1px solid rgba(136,206,2,0.4);
+      border-radius: 12px;
+      padding: 10px 16px;
+      font-size: 12px;
+      color: #88ce02;
+      z-index: 300;
+      font-family: monospace;
+      line-height: 1.8;
+      min-width: 180px;
+    }
+    #debug-panel .label { color: #888; }
+    #debug-bar-bg {
+      width: 100%;
+      height: 6px;
+      background: #333;
+      border-radius: 3px;
+      margin-top: 4px;
+    }
+    #debug-bar {
+      height: 6px;
+      background: #88ce02;
+      border-radius: 3px;
+      width: 0%;
+      transition: width .1s, background .1s;
+    }
+
+    #instructions {
+      position: fixed;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,0.85);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(136,206,2,0.3);
+      border-radius: 20px;
+      padding: 36px 48px;
+      text-align: center;
+      z-index: 500;
+      max-width: 420px;
+    }
+    #instructions h2 { font-size: 24px; color: #88ce02; margin-bottom: 12px; }
+    #instructions p  { color: #ccc; line-height: 1.7; font-size: 14px; }
+    #instructions ul { text-align: left; color: #aaa; font-size: 13px; margin-top: 12px; line-height: 2.2; }
+    #instructions .gesture-hint {
+      display: flex;
+      gap: 16px;
+      margin-top: 16px;
+      justify-content: center;
+    }
+    #instructions .gesture-hint div {
+      background: rgba(136,206,2,0.1);
+      border: 1px solid rgba(136,206,2,0.3);
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 22px;
+      text-align: center;
+    }
+    #instructions .gesture-hint small { display: block; font-size: 11px; color: #888; margin-top: 4px; }
+    #start-btn {
+      margin-top: 20px;
+      padding: 10px 32px;
+      background: #88ce02;
+      color: #111;
+      border: none;
+      border-radius: 30px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background .2s, transform .1s;
+    }
+    #start-btn:hover { background: #a0e003; transform: scale(1.04); }
+    #start-btn:active { transform: scale(0.98); }
+  </style>
+</head>
+<body>
+
+<svg id="game" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 400" overflow="visible">
+  <linearGradient id="ArcGradient">
+    <stop offset="0"   stop-color="#fff" stop-opacity=".2" />
+    <stop offset="50%" stop-color="#fff" stop-opacity="0"  />
+  </linearGradient>
+  <path id="arc" fill="none" stroke="url(#ArcGradient)" stroke-width="4"
+        d="M100,250c250-400,550-400,800,0" pointer-events="none" />
+  <defs>
+    <g id="arrow">
+      <line x2="60" fill="none" stroke="#888" stroke-width="2" />
+      <polygon fill="#888"    points="64 0 58 2 56 0 58 -2" />
+      <polygon fill="#88ce02" points="2 -3 -4 -3 -1 0 -4 3 2 3 5 0" />
+    </g>
+  </defs>
+
+  <!-- Target -->
+  <g id="target">
+    <path fill="#FFF" d="M924.2,274.2c-21.5,21.5-45.9,19.9-52,3.2c-4.4-12.1,2.4-29.2,14.2-41c11.8-11.8,29-18.6,41-14.2 C944.1,228.3,945.7,252.8,924.2,274.2z"/>
+    <path fill="#F4531C" d="M915.8,265.8c-14.1,14.1-30.8,14.6-36,4.1c-4.1-8.3,0.5-21.3,9.7-30.5s22.2-13.8,30.5-9.7 C930.4,235,929.9,251.7,915.8,265.8z"/>
+    <path fill="#FFF" d="M908.9,258.9c-8,8-17.9,9.2-21.6,3.5c-3.2-4.9-0.5-13.4,5.6-19.5c6.1-6.1,14.6-8.8,19.5-5.6 C918.1,241,916.9,250.9,908.9,258.9z"/>
+    <path fill="#F4531C" d="M903.2,253.2c-2.9,2.9-6.7,3.6-8.3,1.7c-1.5-1.8-0.6-5.4,2-8c2.6-2.6,6.2-3.6,8-2 C906.8,246.5,906.1,250.2,903.2,253.2z"/>
+  </g>
+
+  <!-- Aim dot: chỉ vị trí mũi tên sẽ cắm (hiện khi đang giương cung) -->
+  <g id="aim-dot" opacity="0">
+    <circle cx="900" cy="250" r="8" fill="none" stroke="#88ce02" stroke-width="1.5" opacity="0.7"/>
+    <line x1="892" y1="250" x2="908" y2="250" stroke="#88ce02" stroke-width="1.5" opacity="0.7"/>
+    <line x1="900" y1="242" x2="900" y2="258" stroke="#88ce02" stroke-width="1.5" opacity="0.7"/>
+  </g>
+
+  <!-- Bow -->
+  <g id="bow" fill="none" stroke-linecap="round" vector-effect="non-scaling-stroke" pointer-events="none">
+    <polyline fill="none" stroke="#ddd" stroke-linecap="round" points="88,200 88,250 88,300" />
+    <path fill="none" stroke="#88ce02" stroke-width="3" stroke-linecap="round"
+          d="M88,300 c0-10.1,12-25.1,12-50s-12-39.9-12-50" />
+  </g>
+
+  <!-- Arrow on bow -->
+  <g class="arrow-angle">
+    <use x="100" y="250" xlink:href="#arrow" />
+  </g>
+
+  <!-- Clip path for flight zone -->
+  <clipPath id="mask">
+    <polygon opacity=".5"
+      points="0,0 1500,0 1500,200 970,290 950,240 925,220 875,280 890,295 920,310 0,350"
+      pointer-events="none" />
+  </clipPath>
+  <g class="arrows" clip-path="url(#mask)" pointer-events="none"></g>
+
+  <!-- Message: MISS -->
+  <g class="miss" fill="#aaa" opacity="0" transform="translate(0, 100)">
+    <path d="M358 194L363 118 386 120 400 153 416 121 440 119 446 203 419 212 416 163 401 180 380 160 381 204"/>
+    <path d="M450 120L458 200 475 192 474 121"/>
+    <path d="M537 118L487 118 485 160 515 162 509 177 482 171 482 193 529 199 538 148 501 146 508 133 537 137"/>
+    <path d="M540 202L543 178 570 186 569 168 544 167 546 122 590 116 586 142 561 140 560 152 586 153 586 205"/>
+    <path d="M595,215l5-23l31,0l-5,29L595,215z M627,176l13-70l-41-0l-0,70L627,176z"/>
+  </g>
+
+  <!-- Message: BULLSEYE -->
+  <g class="bullseye" fill="#F4531C" opacity="0">
+    <path d="M322,159l15-21l-27-13l-32,13l15,71l41-14l7-32L322,159z M292,142h20l3,8l-16,8 L292,142z M321,182l-18,9l-4-18l23-2V182z"/>
+    <path d="M340 131L359 125 362 169 381 167 386 123 405 129 392 183 351 186z"/>
+    <path d="M413 119L402 188 450 196 454 175 422 175 438 120z"/>
+    <path d="M432 167L454 169 466 154 451 151 478 115 453 113z"/>
+    <path d="M524 109L492 112 466 148 487 155 491 172 464 167 463 184 502 191 513 143 487 141 496 125 517 126z"/>
+    <path d="M537 114L512 189 558 199 566 174 533 175 539 162 553 164 558 150 543 145 547 134 566 148 575 124z"/>
+    <path d="M577 118L587 158 570 198 587 204 626 118 606 118 598 141 590 112z"/>
+    <path d="M635 122L599 198 643 207 649 188 624 188 630 170 639 178 645 162 637 158 649 143 662 151 670 134z"/>
+    <path d="M649,220l4-21l28,4l-6,25L649,220z M681,191l40-79l-35-8L659,184L681,191z"/>
+  </g>
+
+  <!-- Message: HIT -->
+  <g class="hit" fill="#ffcc00" opacity="0" transform="translate(180, -80) rotate(12)">
+    <path d="M383 114L385 195 407 191 406 160 422 155 418 191 436 189 444 112 423 119 422 141 407 146 400 113"/>
+    <path d="M449 185L453 113 477 112 464 186"/>
+    <path d="M486 113L484 130 506 130 481 188 506 187 520 131 540 135 545 119"/>
+    <path d="M526,195l5-20l22,5l-9,16L526,195z M558,164l32-44l-35-9l-19,51L558,164z"/>
+  </g>
+</svg>
+
+<div id="hud">
+  <span>Điểm:</span><b id="score">0</b>
+  <span>|</span>
+  <span>Mũi tên:</span><b id="arrow-count">10</b>
+  <span>|</span>
+  <span>Liên tiếp:</span><b id="streak">0</b>
+</div>
+
+<div id="status-badge">Đang khởi động camera...</div>
+
+<div id="debug-panel">
+  <div><span class="label">Tay: </span><span id="dbg-hand">không thấy</span></div>
+  <div><span class="label">Pinch: </span><span id="dbg-pinch">0</span>px</div>
+  <div><span class="label">Kéo: </span><span id="dbg-draw">-</span></div>
+  <div><span class="label">Trạng thái: </span><span id="dbg-state">-</span></div>
+  <div id="debug-bar-bg"><div id="debug-bar"></div></div>
+</div>
+
+<div id="webcam-container">
+  <video id="webcam" autoplay playsinline muted></video>
+  <canvas id="overlay-canvas"></canvas>
+</div>
+
+<div id="instructions">
+  <h2>Bắn Cung - Điều Khiển Bằng Tay</h2>
+  <p>Dùng <strong>bàn tay thật</strong> trước webcam để chơi!</p>
+  <div class="gesture-hint">
+    <div>✋<small>Giơ tay<br>= Ngắm</small></div>
+    <div>🤙<small>Xòe ngón cái<br>= Giương cung</small></div>
+    <div>✊<small>Nắm tay<br>= Bắn!</small></div>
+  </div>
+  <ul>
+    <li>✋ <b>Di chuyển tay</b> để điều chỉnh hướng bắn</li>
+    <li>🤙 <b>Mở ngón cái ra xa</b> các ngón khác để giương cung</li>
+    <li>✊ <b>Nắm/Gập tay lại</b> để bắn mũi tên</li>
+  </ul>
+  <button id="start-btn">Bắt Đầu</button>
+</div>
+<script>
+const gameState = {
+  score: 0,
+  arrows: 10,
+  streak: 0,
+  isDrawing: false,
+  hasFired: false,
+  gameStarted: false,
+
+  // Pinch/gesture thresholds (in normalised 0-1 units × overlayWidth)
+  // These are tuned for a 220px-wide canvas
+  DRAW_THRESH: 40,     // px: thumb-index dist above this = "drawing"
+  FIRE_THRESH: 22,     // px: thumb-index dist below this (after drawing) = "fire"
+};
+
+const gameSvg   = document.getElementById("game");
+const arrowsGrp = document.querySelector(".arrows");
+const svgCursor = gameSvg.createSVGPoint();
+
+const TARGET       = { x: 900,  y: 249.5 };
+const LINE_SEGMENT = { x1: 875, y1: 280, x2: 925, y2: 220 };
+const PIVOT        = { x: 100,  y: 250 };
+
+let randomAngle   = 0;
+let hasPulled     = false;
+let prevPinchDist = null;
+
+function updateHUD() {
+  document.getElementById("score").textContent        = gameState.score;
+  document.getElementById("arrow-count").textContent  = gameState.arrows;
+  document.getElementById("streak").textContent       = gameState.streak;
+}
+
+function setStatus(msg, cls) {
+  const el = document.getElementById("status-badge");
+  el.textContent = msg;
+  el.className   = cls || "";
+}
+
+function updateDebug(handSeen, pinchPx, drawLabel, stateLabel) {
+  document.getElementById("dbg-hand").textContent  = handSeen ? "✅ thấy tay" : "❌ không thấy";
+  document.getElementById("dbg-pinch").textContent = Math.round(pinchPx);
+  document.getElementById("dbg-draw").textContent  = drawLabel;
+  document.getElementById("dbg-state").textContent = stateLabel;
+
+  // Visual bar: 0 = closed, 100% = very open (100px)
+  const pct = Math.min(100, (pinchPx / 100) * 100);
+  const bar = document.getElementById("debug-bar");
+  bar.style.width = pct + "%";
+  // Red = below fire, yellow = between thresholds, green = drawing
+  if (pinchPx >= gameState.DRAW_THRESH) {
+    bar.style.background = "#88ce02"; // green = drawing
+  } else if (pinchPx >= gameState.FIRE_THRESH) {
+    bar.style.background = "#ffcc00"; // yellow = neutral
+  } else {
+    bar.style.background = "#F4531C"; // red = fire zone
+  }
+}
+
+/**
+ * Aim the bow at a normalised position (0-1 range, already mapped from hand).
+ * drawPull: 0 = not pulled, 1 = fully pulled
+ */
+// Lưu điểm bezier hiện tại để dùng khi bắn
+let currentArcP = {
+  P0: {x:100, y:250},
+  P1: {x:350, y:100},
+  P2: {x:700, y:100},
+  P3: {x:900, y:250}
+};
+
+/**
+ * aimNormX: vị trí ngang cổ tay (0-1)
+ * handAngleDeg: góc nghiêng cổ tay (degrees, âm=hướng lên, dương=hướng xuống)
+ * drawPull: 0-1 mức kéo cung
+ * Cung xoay ĐÚNG theo góc cổ tay thật.
+ */
+function aimAt(aimNormX, handAngleDeg, drawPull) {
+  // ── Y đích: góc tay → SVG y ──
+  // handAngleDeg = 0°  → targetY = 250 (tâm bia)
+  // handAngleDeg = -20° → targetY = 210 (phần trên bia)
+  // handAngleDeg = +20° → targetY = 290 (phần dưới bia)
+  const targetY = 250 + handAngleDeg * 2 + (drawPull > 0 ? randomAngle * 400 : 0);
+
+  // ── Đường quỹ đạo bezier (P1/P2 theo targetY để arc hướng đúng) ──
+  const peakOffset = 80 + drawPull * 120;
+  const P0 = { x: 100, y: 250 };
+  const P1 = { x: 350, y: targetY - peakOffset };
+  const P2 = { x: 700, y: targetY - peakOffset * 0.4 };
+  const P3 = { x: 900, y: targetY };
+
+  currentArcP = { P0, P1, P2, P3 };
+
+  // ── Vẽ arc SVG ──
+  const arcD = `M${P0.x},${P0.y} C${P1.x},${P1.y} ${P2.x},${P2.y} ${P3.x},${P3.y}`;
+  gsap.to("#arc", { duration: 0.12, attr: { d: arcD }, autoAlpha: drawPull });
+
+  // ── Góc cung = TRỰC TIẾP từ góc cổ tay ──
+  // handAngleDeg âm = cung nghiêng lên, dương = cung nghiêng xuống
+  const bowDeg = handAngleDeg;
+
+  // ── Aim dot di chuyển theo target ──
+  const aimDotEl = document.getElementById("aim-dot");
+  aimDotEl.setAttribute("transform", `translate(0, ${targetY - 250})`);
+  gsap.to("#aim-dot", { duration: 0.1, opacity: drawPull > 0 ? 0.9 : 0.3 });
+
+  const distance = drawPull * 50;
+  const scale    = Math.min(Math.max(distance / 30, 1), 2);
+
+  gsap.to("#bow", {
+    duration: 0.12,
+    scaleX: scale,
+    rotation: bowDeg,
+    transformOrigin: "right center"
+  });
+  gsap.to(".arrow-angle", {
+    duration: 0.12,
+    rotation: bowDeg,
+    svgOrigin: "100 250"
+  });
+  gsap.to(".arrow-angle use", { duration: 0.12, x: -distance });
+  gsap.to("#bow polyline", {
+    duration: 0.12,
+    attr: { points: "88,200 " + Math.min(PIVOT.x - (1/scale)*distance, 88) + ",250 88,300" }
+  });
+}
+
+function cubicBezierPoint(P0, P1, P2, P3, t) {
+  const mt = 1 - t;
+  return {
+    x: mt*mt*mt*P0.x + 3*mt*mt*t*P1.x + 3*mt*t*t*P2.x + t*t*t*P3.x,
+    y: mt*mt*mt*P0.y + 3*mt*mt*t*P1.y + 3*mt*t*t*P2.y + t*t*t*P3.y
+  };
+}
+function cubicBezierTangent(P0, P1, P2, P3, t) {
+  const mt = 1 - t;
+  return {
+    x: 3*(mt*mt*(P1.x-P0.x) + 2*mt*t*(P2.x-P1.x) + t*t*(P3.x-P2.x)),
+    y: 3*(mt*mt*(P1.y-P0.y) + 2*mt*t*(P2.y-P1.y) + t*t*(P3.y-P2.y))
+  };
+}
+
+function fireArrow() {
+  if (gameState.hasFired || gameState.arrows <= 0) return;
+
+  gameState.hasFired = true;
+  gameState.arrows--;
+  updateHUD();
+
+  // Reset bow
+  gsap.to("#bow", { duration: 0.4, scaleX:1, transformOrigin:"right center", ease:"elastic.out(1,0.4)" });
+  gsap.to("#bow polyline", { duration: 0.4, attr:{ points:"88,200 88,250 88,300" }, ease:"elastic.out(1,0.4)" });
+  gsap.to("#arc", { duration: 0.2, opacity: 0 });
+  gsap.set(".arrow-angle use", { opacity: 0 });
+
+  // Tạo mũi tên
+  const newArrow = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  newArrow.setAttributeNS("http://www.w3.org/1999/xlink", "href", "#arrow");
+  arrowsGrp.appendChild(newArrow);
+
+  // Lấy điểm bezier đã lưu – đảm bảo arc luôn đến đích đúng
+  const { P0, P1, P2, P3 } = currentArcP;
+
+  const DURATION = 500;
+  let startTime  = null;
+  let stopped    = false;
+
+  function animateArrow(ts) {
+    if (stopped) return;
+    if (!startTime) startTime = ts;
+    const t = Math.min((ts - startTime) / DURATION, 1);
+
+    const pos = cubicBezierPoint(P0, P1, P2, P3, t);
+    const tan = cubicBezierTangent(P0, P1, P2, P3, t);
+    const deg = Math.atan2(tan.y, tan.x) * 180 / Math.PI;
+
+    newArrow.setAttribute("transform", `translate(${pos.x},${pos.y}) rotate(${deg})`);
+
+    // Kiểm tra va chạm
+    const radians = deg * Math.PI / 180;
+    const arrowSeg = {
+      x1: pos.x,
+      y1: pos.y,
+      x2: pos.x + Math.cos(radians) * 60,
+      y2: pos.y + Math.sin(radians) * 60
+    };
+    const inter = getIntersection(arrowSeg, LINE_SEGMENT);
+    if (inter && inter.segment1 && inter.segment2) {
+      stopped = true;
+      const dx = inter.x - TARGET.x;
+      const dy = inter.y - TARGET.y;
+      const d  = Math.sqrt(dx*dx + dy*dy);
+      let selector = ".hit", pts = 1;
+      if (d < 7)  { selector = ".bullseye"; pts = 3; }
+      gameState.score  += pts;
+      gameState.streak += 1;
+      updateHUD();
+      showMessage(selector);
+      setTimeout(() => { gameState.hasFired = false; }, 800);
+      return;
+    }
+
+    if (t < 1) {
+      requestAnimationFrame(animateArrow);
+    } else {
+      onMiss();
+    }
+  }
+  requestAnimationFrame(animateArrow);
+}
+
+function onMiss() {
+  gameState.streak = 0;
+  updateHUD();
+  showMessage(".miss");
+  setTimeout(() => { gameState.hasFired = false; }, 800);
+}
+
+function showMessage(selector) {
+  // GSAP 3: killTweensOf + fromTo với stagger
+  gsap.killTweensOf(selector);
+  gsap.killTweensOf(selector + " path");
+  gsap.set(selector, { autoAlpha: 1 });
+  gsap.fromTo(selector+" path",
+    { rotation: -5, scale: 0, transformOrigin: "center" },
+    { duration: 0.5, scale: 1, ease: "back.out(1.7)", stagger: 0.05 }
+  );
+  gsap.to(selector+" path", {
+    delay: 2.5, duration: 0.3,
+    rotation: 20, scale: 0,
+    ease: "back.in(1.7)", stagger: 0.03
+  });
+}
+
+function getIntersection(s1, s2) {
+  const dx1 = s1.x2-s1.x1, dy1 = s1.y2-s1.y1;
+  const dx2 = s2.x2-s2.x1, dy2 = s2.y2-s2.y1;
+  const cx  = s1.x1-s2.x1, cy  = s1.y1-s2.y1;
+  const den = dy2*dx1 - dx2*dy1;
+  if (den === 0) return null;
+  const ua = (dx2*cy - dy2*cx) / den;
+  const ub = (dx1*cy - dy1*cx) / den;
+  return { x: s1.x1+ua*dx1, y: s1.y1+ua*dy1, segment1: ua>=0&&ua<=1, segment2: ub>=0&&ub<=1 };
+}
+
+const videoEl    = document.getElementById("webcam");
+const overlayEl  = document.getElementById("overlay-canvas");
+const overlayCtx = overlayEl.getContext("2d");
+
+// Match the actual display size
+overlayEl.width  = 220;
+overlayEl.height = 165;
+
+let handsModel;
+let rafRunning = false;   // guard: chỉ chạy 1 vòng RAF
+let frameCount = 0;       // đếm frame để debug
+
+function initMediaPipe() {
+  console.log("[MediaPipe] Đang khởi động...");
+  setStatus("⏳ Đang tải model tay...", "");
+
+  handsModel = new Hands({
+    locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+  });
+
+  handsModel.setOptions({
+    maxNumHands: 1,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.6,
+    minTrackingConfidence: 0.5
+  });
+
+  handsModel.onResults(onHandResults);
+
+  // ── Dùng getUserMedia trực tiếp thay vì Camera utility ──
+  navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240, facingMode: "user" } })
+    .then(stream => {
+      videoEl.srcObject = stream;
+      videoEl.onloadedmetadata = () => {
+        videoEl.play();
+        console.log("[MediaPipe] Video sẵn sàng, bắt đầu vòng lặp RAF");
+        setStatus("✅ Camera sẵn sàng – giơ tay lên!", "ready");
+        startRAFLoop();
+      };
+    })
+    .catch(err => {
+      console.error("[MediaPipe] Lỗi camera:", err);
+      setStatus("❌ Không thể truy cập camera – hãy cho phép quyền trong trình duyệt.", "");
+    });
+}
+
+// ── Vòng lặp RAF: liên tục gửi frame vào model ──
+function startRAFLoop() {
+  if (rafRunning) return;  // chỉ khởi động 1 lần
+  rafRunning = true;
+
+  async function loop() {
+    // Chỉ gửi khi video đang phát và có dữ liệu
+    if (videoEl.readyState >= 2 && !videoEl.paused) {
+      try {
+        await handsModel.send({ image: videoEl });
+        frameCount++;
+        // Log mỗi 60 frame (~2 giây) để xác nhận vẫn chạy
+        if (frameCount % 60 === 0) {
+          console.log("[RAF] Frame", frameCount, "– model vẫn hoạt động ✅");
+        }
+      } catch (e) {
+        // Bắt lỗi nhưng KHÔNG dừng vòng lặp
+        console.warn("[RAF] Lỗi send frame:", e.message);
+      }
+    }
+    requestAnimationFrame(loop);  // luôn schedule frame tiếp theo
+  }
+
+  requestAnimationFrame(loop);
+}
+
+function onHandResults(results) {
+  overlayCtx.clearRect(0, 0, overlayEl.width, overlayEl.height);
+
+  if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+    updateDebug(false, 0, "-", "Không thấy tay");
+    if (gameState.gameStarted) {
+      setStatus("✋ Giơ tay vào khung hình", "ready");
+      gameState.isDrawing = false;
+      hasPulled = false;
+      prevPinchDist = null;
+    }
+    return;
+  }
+
+  const hand = results.multiHandLandmarks[0];
+
+  // Draw hand skeleton on overlay canvas
+  drawConnectors(overlayCtx, hand, HAND_CONNECTIONS, { color:"#88ce02", lineWidth:1.5 });
+  drawLandmarks(overlayCtx, hand, { color:"#ffcc00", lineWidth:1, radius:3 });
+
+  // ── Key landmarks (all in normalised 0-1 space) ──
+  const thumbTip  = hand[4];   // ngón cái đầu
+  const indexTip  = hand[8];   // ngón trỏ đầu
+  const middleTip = hand[12];  // ngón giữa đầu
+  const wrist     = hand[0];   // cổ tay
+
+  // ── Compute pinch distance in overlay-pixel space ──
+  // We flip X because webcam is mirrored
+  const tx = (1 - thumbTip.x)  * overlayEl.width;
+  const ty = thumbTip.y         * overlayEl.height;
+  const ix = (1 - indexTip.x)  * overlayEl.width;
+  const iy = indexTip.y         * overlayEl.height;
+  const pinchPx = Math.sqrt((tx-ix)**2 + (ty-iy)**2);
+
+  // Draw pinch line on overlay
+  overlayCtx.beginPath();
+  overlayCtx.moveTo(tx, ty);
+  overlayCtx.lineTo(ix, iy);
+  overlayCtx.strokeStyle = pinchPx > gameState.DRAW_THRESH ? "#88ce02" : (pinchPx < gameState.FIRE_THRESH ? "#F4531C" : "#ffcc00");
+  overlayCtx.lineWidth = 2;
+  overlayCtx.stroke();
+
+  // Thumb tip dot
+  overlayCtx.beginPath();
+  overlayCtx.arc(tx, ty, 5, 0, Math.PI*2);
+  overlayCtx.fillStyle = "#88ce02";
+  overlayCtx.fill();
+
+  // Index tip dot
+  overlayCtx.beginPath();
+  overlayCtx.arc(ix, iy, 5, 0, Math.PI*2);
+  overlayCtx.fillStyle = "#ffcc00";
+  overlayCtx.fill();
+
+  // Draw pinch distance label on overlay
+  overlayCtx.font = "bold 11px monospace";
+  overlayCtx.fillStyle = "#fff";
+  overlayCtx.fillText(Math.round(pinchPx) + "px", Math.min(tx, ix), Math.min(ty, iy) - 6);
+
+  // ── Tính góc cổ tay (wrist → middle MCP) ──
+  // Dùng toạ độ gốc (không mirror) để tính góc tay đúng
+  // Corrected for 4:3 aspect ratio (320x240 webcam)
+  const middleMCP = hand[9];
+  const hdx = middleMCP.x - wrist.x;          // dương = ngón tay sang phải
+  const hdy = middleMCP.y - wrist.y;          // dương = ngón tay xuống thấp
+  const handAngleDeg = Math.atan2(hdy * 240, hdx * 320) * 180 / Math.PI;
+
+  // Vẽ mũi tên hướng cổ tay lên overlay (màu cam)
+  const wx_px = (1 - wrist.x)     * overlayEl.width;
+  const wy_px = wrist.y           * overlayEl.height;
+  const mx_px = (1 - middleMCP.x) * overlayEl.width;  // mirror X để hiển thị
+  const my_px = middleMCP.y       * overlayEl.height;
+  overlayCtx.beginPath();
+  overlayCtx.moveTo(wx_px, wy_px);
+  overlayCtx.lineTo(mx_px, my_px);
+  overlayCtx.strokeStyle = "#ff8800";
+  overlayCtx.lineWidth = 3;
+  overlayCtx.stroke();
+  // Mũi nhỏ ở đầu
+  overlayCtx.beginPath();
+  overlayCtx.arc(mx_px, my_px, 4, 0, Math.PI * 2);
+  overlayCtx.fillStyle = "#ff8800";
+  overlayCtx.fill();
+
+  // ── Ôfset bù trừ tư thế đứng tự nhiên:
+  // Khi tay để thẳng (ngón tay hướng lên), handAngleDeg ≈ -90°
+  // Thêm +90° để tư thế đó → góc =0° → nhắm thẳng tâm bia
+  // Nghiêng tay lên rất  → angle < -90° → adjusted < 0 → nhắm trên bia
+  // Nghiêng tay xuống → angle > -90° → adjusted > 0 → nhắm dưới bia
+  const AIM_BIAS    = 90;
+  const aimAngleDeg = handAngleDeg + AIM_BIAS; // 0° = tâm bia, âm = trên, dương = dưới
+
+  document.getElementById("dbg-state") && (document.getElementById("dbg-state").textContent =
+    `góc: ${Math.round(aimAngleDeg)}° (raw:${Math.round(handAngleDeg)}°)`);
+
+  if (!gameState.gameStarted) {
+    updateDebug(true, pinchPx, "-", `aimAngle: ${Math.round(aimAngleDeg)}°`);
+    return;
+  }
+
+  let drawPull = 0;
+  if (pinchPx >= gameState.DRAW_THRESH) {
+    drawPull = Math.min(1, (pinchPx - gameState.DRAW_THRESH) / 60);
+  }
+
+  // ── Dùng góc đã hiệu chỉnh để ngắm ──
+  aimAt(1 - wrist.x, aimAngleDeg, drawPull);
+  updateDebug(true, pinchPx, `${Math.round(drawPull*100)}%`, `↕ ${Math.round(aimAngleDeg)}°`);
+
+  // ── Gesture State Machine ──
+  if (pinchPx >= gameState.DRAW_THRESH) {
+    // DRAWING STATE: thumb and index far apart
+    if (!gameState.isDrawing) {
+      gameState.isDrawing = true;
+      randomAngle = (Math.random() * Math.PI * 0.03) - 0.015;
+      gsap.to(".arrow-angle use", { duration: 0.3, opacity: 1 });
+    }
+    hasPulled = true;
+    setStatus(`💪 Đang giương cung (${Math.round(pinchPx)}px) – nắm lại để bắn!`, "drawing");
+    updateDebug(true, pinchPx, `${Math.round(drawPull*100)}%`, "GIƯƠNG CUNG");
+
+  } else if (hasPulled && pinchPx < gameState.FIRE_THRESH && !gameState.hasFired) {
+    // FIRE STATE: was drawing, now pinch closed
+    hasPulled = false;
+    gameState.isDrawing = false;
+    setStatus("BẮN!", "fired");
+    updateDebug(true, pinchPx, "-", "BẮN!");
+    fireArrow();
+    setTimeout(() => setStatus("Sẵn sàng – giơ tay lên!", "ready"), 900);
+
+  } else {
+    // IDLE / WAITING STATE
+    if (!gameState.isDrawing) {
+      gameState.isDrawing = false;
+    }
+    const hint = pinchPx < gameState.FIRE_THRESH ? "Xòe ngón cái ra để giương" : "Ngắm và xòe ngón cái";
+    setStatus("✅ " + hint, "ready");
+    updateDebug(true, pinchPx, "-", pinchPx < gameState.FIRE_THRESH ? "Đang đóng (nằm trong fire zone)" : "Chờ kéo");
+  }
+
+  prevPinchDist = pinchPx;
+}
+
+document.getElementById("start-btn").addEventListener("click", () => {
+  document.getElementById("instructions").style.display = "none";
+  gameState.gameStarted = true;
+  updateHUD();
+  initMediaPipe();
+  aimAt(0.5, -15, 0);  // góc ban đầu: -15° = hướng lên nhẹ (tư thế tự nhiên cầm cung)
+});
+</script>
+</body>
+</html>
